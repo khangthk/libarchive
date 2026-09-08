@@ -67,13 +67,22 @@ struct sparse {
 
 static void create_sparse_file(const char *, const struct sparse *);
 
-#if defined(__APPLE__)
-/* On APFS holes need to be at least 4096x4097 bytes */
-#define MIN_HOLE 16781312
-#else
-/* Elsewhere we work with 4096*10 bytes */
-#define MIN_HOLE 409600
-#endif
+/* This should be large enough that any OS/filesystem that
+ * does support sparse files is certain to store a gap this big
+ * as a hole. */
+/* A few data points:
+ * = ZFS on FreeBSD needs this to be at least 200kB
+ * = macOS APFS needs this to be at least 4096x4097 bytes
+ * = Linux tmpfs on 16KB-page architectures (like LoongArch64) uses
+ *   32MiB Transparent Huge Pages (THP). If a hole is exactly the
+ *   size of a THP, the data blocks on either side can end up in
+ *   adjacent physical folios, causing SEEK_HOLE to report the range
+ *   as contiguous data.
+ *
+ * 64MiB here is enough to ensure a hole exists between THP folios on all
+ * common architectures.
+ */
+#define MIN_HOLE (64 * 1024UL * 1024UL)
 
 #if defined(_WIN32) && !defined(__CYGWIN__)
 #include <winioctl.h>
@@ -195,7 +204,7 @@ is_sparse_supported_fiemap(const char *path)
 		return (0);
 	fm = (struct fiemap *)buff;
 	fm->fm_start = 0;
-	fm->fm_length = ~0ULL;;
+	fm->fm_length = ~0ULL;
 	fm->fm_flags = FIEMAP_FLAG_SYNC;
 	fm->fm_extent_count = (sizeof(buff) - sizeof(*fm))/
 		sizeof(struct fiemap_extent);
@@ -361,7 +370,9 @@ verify_sparse_file(struct archive *a, const char *path,
 		/* Block that overlaps beginning of data */
 		if (expected_offset < offset
 		    && expected_offset + (int64_t)sparse->size <= offset + (int64_t)bytes_read) {
-			const char *end = (const char *)buff + (expected_offset - offset) + (size_t)sparse->size;
+			/* Avoid forming an intermediate pointer before buff. */
+			const char *end = (const char *)buff
+			    + ((expected_offset - offset) + (int64_t)sparse->size);
 #if DEBUG
 			fprintf(stderr, "    overlapping hole expected_offset=%d, size=%d\n", (int)expected_offset, (int)sparse->size);
 #endif
@@ -376,7 +387,8 @@ verify_sparse_file(struct archive *a, const char *path,
 		}
 		/* Blocks completely contained in data we just read. */
 		while (expected_offset + (int64_t)sparse->size <= offset + (int64_t)bytes_read) {
-			const char *end = (const char *)buff + (expected_offset - offset) + (size_t)sparse->size;
+			const char *end = (const char *)buff
+			    + ((expected_offset - offset) + (int64_t)sparse->size);
 			if (sparse->type == HOLE) {
 #if DEBUG
 				fprintf(stderr, "    contained hole expected_offset=%d, size=%d\n", (int)expected_offset, (int)sparse->size);
@@ -605,7 +617,8 @@ DEFINE_TEST(test_sparse_basic)
 	verify_sparse_file(a, "file2", sparse_file2, 20);
 	/* Encoded non sparse; expect a data block but no sparse entries. */
 	verify_sparse_file(a, "file3", sparse_file3, 0);
-	verify_sparse_file(a, "file4", sparse_file4, 2);
+	if (sizeof(off_t) > 4)
+		verify_sparse_file(a, "file4", sparse_file4, 2);
 
 	assertEqualInt(ARCHIVE_OK, archive_read_free(a));
 
@@ -632,7 +645,8 @@ DEFINE_TEST(test_sparse_basic)
 	verify_sparse_file(a, "file1", sparse_file1, 0);
 	verify_sparse_file(a, "file2", sparse_file2, 0);
 	verify_sparse_file(a, "file3", sparse_file3, 0);
-	verify_sparse_file(a, "file4", sparse_file4, 0);
+	if (sizeof(off_t) > 4)
+		verify_sparse_file(a, "file4", sparse_file4, 0);
 
 	assertEqualInt(ARCHIVE_OK, archive_read_free(a));
 
@@ -689,4 +703,55 @@ DEFINE_TEST(test_fully_sparse_files)
 
 	assertEqualInt(ARCHIVE_OK, archive_read_free(a));
 	free(cwd);
+}
+
+DEFINE_TEST(test_sparse_iterator)
+{
+	struct archive_entry *entry;
+	int64_t offset, length;
+	int count;
+
+	entry = archive_entry_new();
+	archive_entry_set_pathname(entry, "testfile");
+	archive_entry_set_mode(entry, 0100644);
+	archive_entry_set_size(entry, 1024);
+
+	/* Add one sparse block covering the entire file */
+	archive_entry_sparse_add_entry(entry, 0, 1024);
+
+	/* Should remove the only block covering the entire file */
+	archive_entry_sparse_reset(entry);
+
+	count = 0;
+	while (archive_entry_sparse_next(entry, &offset, &length) == ARCHIVE_OK)
+		count++;
+	assertEqualInt(0, count);
+	assertEqualInt(0, archive_entry_sparse_count(entry));
+
+	archive_entry_free(entry);
+}
+
+DEFINE_TEST(test_sparse_clear)
+{
+	struct archive_entry *entry;
+	la_int64_t offset, length;
+
+	entry = archive_entry_new();
+	archive_entry_set_size(entry, 1024);
+
+	/* Add two sparse blocks */
+	archive_entry_sparse_add_entry(entry, 0, 16);
+	archive_entry_sparse_add_entry(entry, 123, 16);
+
+	/* Set iterator to head */
+	archive_entry_sparse_reset(entry);
+
+	/* Clear the two blocks */
+	archive_entry_sparse_clear(entry);
+
+	assertEqualInt(0, archive_entry_sparse_count(entry));
+	assertEqualInt(ARCHIVE_WARN,
+		archive_entry_sparse_next(entry, &offset, &length));
+
+	archive_entry_free(entry);
 }

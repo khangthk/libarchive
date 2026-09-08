@@ -1,3 +1,6 @@
+#
+# SPDX-License-Identifier: BSD-2-Clause
+#
 ############################################
 #
 # How to build bsdtar_test
@@ -11,6 +14,7 @@ IF(ENABLE_TAR AND ENABLE_TEST)
     test_0.c
     test_basic.c
     test_copy.c
+    test_crlf_mtree.c
     test_empty_mtree.c
     test_extract_tar_Z.c
     test_extract_tar_bz2.c
@@ -23,15 +27,18 @@ IF(ENABLE_TAR AND ENABLE_TEST)
     test_extract_tar_lzo.c
     test_extract_tar_xz.c
     test_extract_tar_zstd.c
+    test_edit_pathname_hardlink.c
     test_format_newc.c
     test_help.c
     test_leading_slash.c
+    test_list_item.c
     test_missing_file.c
     test_option_C_upper.c
     test_option_C_mtree.c
     test_option_H_upper.c
     test_option_L_upper.c
     test_option_O_upper.c
+    test_option_P_upper.c
     test_option_T_upper.c
     test_option_U_upper.c
     test_option_X_upper.c
@@ -53,6 +60,8 @@ IF(ENABLE_TAR AND ENABLE_TEST)
     test_option_lz4.c
     test_option_lzma.c
     test_option_lzop.c
+    test_option_mode.c
+    test_option_mtime.c
     test_option_n.c
     test_option_newer_than.c
     test_option_nodump.c
@@ -63,6 +72,7 @@ IF(ENABLE_TAR AND ENABLE_TEST)
     test_option_r.c
     test_option_s.c
     test_option_safe_writes.c
+    test_option_stdout_size_exceeds_declared.c
     test_option_uid_uname.c
     test_option_uuencode.c
     test_option_xattrs.c
@@ -98,23 +108,12 @@ IF(ENABLE_TAR AND ENABLE_TEST)
   # Generate list.h by grepping DEFINE_TEST() lines out of the C sources.
   #
   GENERATE_LIST_H(${CMAKE_CURRENT_BINARY_DIR}/list.h
-    ${CMAKE_CURRENT_LIST_FILE} ${bsdtar_test_SOURCES})
+    ${CMAKE_CURRENT_LIST_FILE} bsdtar_test ${bsdtar_test_SOURCES})
   SET_PROPERTY(DIRECTORY APPEND PROPERTY INCLUDE_DIRECTORIES
     ${CMAKE_CURRENT_BINARY_DIR})
 
-  # list.h has a line DEFINE_TEST(testname) for every
-  # test.  We can use that to define the tests for cmake by
-  # defining a DEFINE_TEST macro and reading list.h in.
-  MACRO (DEFINE_TEST _testname)
-    ADD_TEST(
-      NAME bsdtar_${_testname}
-      COMMAND bsdtar_test -vv
-                          -p $<TARGET_FILE:bsdtar>
-                          -r ${CMAKE_CURRENT_SOURCE_DIR}
-                          ${_testname})
-  ENDMACRO (DEFINE_TEST _testname)
+  DISCOVER_TESTS(bsdtar ${bsdtar_test_SOURCES})
 
-  INCLUDE(${CMAKE_CURRENT_BINARY_DIR}/list.h)
   INCLUDE_DIRECTORIES(${CMAKE_CURRENT_BINARY_DIR})
   INCLUDE_DIRECTORIES(${PROJECT_SOURCE_DIR}/test_utils)
   INCLUDE_DIRECTORIES(${PROJECT_SOURCE_DIR}/tar/test)

@@ -4,39 +4,13 @@
  * Copyright (c) 2009, 2010 Joerg Sonnenberger <joerg@NetBSD.org>
  * Copyright (c) 2007-2008 Dag-Erling Smørgrav
  * All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- * 1. Redistributions of source code must retain the above copyright
- *    notice, this list of conditions and the following disclaimer
- *    in this position and unchanged.
- * 2. Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in the
- *    documentation and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
- * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
- * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
- * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
- * SUCH DAMAGE.
- *
- * This file would be much shorter if we didn't care about command-line
- * compatibility with Info-ZIP's UnZip, which requires us to duplicate
- * parts of libarchive in order to gain more detailed control of its
- * behaviour for the purpose of implementing the -n, -o, -L and -a
- * options.
  */
 
 #include "bsdunzip_platform.h"
 
 #include "la_queue.h"
+#include "lafe_fnmatch.h"
+#include "lafe_getline.h"
 #ifdef HAVE_SYS_STAT_H
 #include <sys/stat.h>
 #endif
@@ -56,6 +30,9 @@
 #ifdef HAVE_LOCALE_H
 #include <locale.h>
 #endif
+#ifdef HAVE_SIGNAL_H
+#include <signal.h>
+#endif
 #ifdef HAVE_STDARG_H
 #include <stdarg.h>
 #endif
@@ -68,6 +45,12 @@
 #endif
 #ifdef HAVE_UNISTD_H
 #include <unistd.h>
+#elif defined(HAVE_IO_H)
+/*
+ * Windows has no <unistd.h>; close(), isatty(), open() and write() are
+ * made available by including io.h instead.
+ */
+#include <io.h>
 #endif
 #if ((!defined(HAVE_UTIMENSAT) && defined(HAVE_LUTIMES)) || \
     (!defined(HAVE_FUTIMENS) && defined(HAVE_FUTIMES)))
@@ -75,13 +58,17 @@
 #include <sys/time.h>
 #endif
 #endif
-#ifdef HAVE_GETOPT_OPTRESET
-#include <getopt.h>
-#endif
 
 #include "bsdunzip.h"
 #include "passphrase.h"
-#include "err.h"
+#include "lafe_err.h"
+
+#ifndef O_BINARY
+#define O_BINARY	0
+#endif
+#ifndef O_CLOEXEC
+#define O_CLOEXEC	0
+#endif
 
 /* command-line options */
 static int		 a_opt;		/* convert EOL */
@@ -138,7 +125,7 @@ static int noeol;
 static char *passphrase_buf;
 
 /* fatal error message + errno */
-static void
+static void __LA_NORETURN
 error(const char *fmt, ...)
 {
 	va_list ap;
@@ -155,7 +142,7 @@ error(const char *fmt, ...)
 }
 
 /* fatal error message, no errno */
-static void
+static void __LA_NORETURN
 errorx(const char *fmt, ...)
 {
 	va_list ap;
@@ -171,6 +158,7 @@ errorx(const char *fmt, ...)
 	exit(EXIT_FAILURE);
 }
 
+#if defined(HAVE_LCHMOD) || defined(HAVE_UTIMENSAT) || defined(HAVE_LUTIMES)
 /* non-fatal error message + errno */
 static void
 warning(const char *fmt, ...)
@@ -186,6 +174,7 @@ warning(const char *fmt, ...)
 	va_end(ap);
 	fprintf(stderr, ": %s\n", strerror(errno));
 }
+#endif
 
 /* non-fatal error message, no errno */
 static void
@@ -260,7 +249,7 @@ pathdup(const char *path)
 	}
 	if (L_opt) {
 		for (i = 0; i < len; ++i)
-			str[i] = tolower((unsigned char)path[i]);
+			str[i] = (char)tolower((unsigned char)path[i]);
 	} else {
 		memcpy(str, path, len);
 	}
@@ -331,12 +320,8 @@ match_pattern(struct pattern_list *list, const char *str)
 	struct pattern *entry;
 
 	STAILQ_FOREACH(entry, list, link) {
-#ifdef HAVE_FNMATCH
 		if (fnmatch(entry->pattern, str, C_opt ? FNM_CASEFOLD : 0) == 0)
 			return (1);
-#else
-#error "Unsupported platform: fnmatch() is required"
-#endif
 	}
 	return (0);
 }
@@ -356,9 +341,33 @@ accept_pathname(const char *pathname)
 	return (1);
 }
 
+/* System call to create a directory. */
+static int
+system_mkdir(const char *pathname, int mode)
+{
+#if defined(_WIN32) && !defined(__CYGWIN__)
+	(void)mode; /* UNUSED */
+	return _mkdir(pathname);
+#else
+	return mkdir(pathname, mode);
+#endif
+}
+
+static void
+system_unlink(const char *pathname) {
+#if defined(_WIN32) && !defined(__CYGWIN__)
+	if (unlink(pathname) == -1) {
+		/* Windows treats directory symbolic links specially. */
+		rmdir(pathname);
+	}
+#else
+	(void)unlink(pathname);
+#endif
+}
+
 /*
  * Create the specified directory with the specified mode, taking certain
- * precautions on they way.
+ * precautions on the way.
  */
 static void
 make_dir(const char *path, int mode)
@@ -376,14 +385,9 @@ make_dir(const char *path, int mode)
 		 * even compromise (if this non-directory happens to be a
 		 * symlink to somewhere unsafe), so we don't.
 		 */
-
-		/*
-		 * Don't check unlink() result; failure will cause mkdir()
-		 * to fail later, which we will catch.
-		 */
-		(void)unlink(path);
+		system_unlink(path);
 	}
-	if (mkdir(path, mode) != 0 && errno != EEXIST)
+	if (system_mkdir(path, (mode_t)mode) != 0 && errno != EEXIST)
 		error("mkdir('%s')", path);
 }
 
@@ -408,10 +412,10 @@ make_parent(char *path)
 			*sep = '/';
 			return;
 		}
-		unlink(path);
+		system_unlink(path);
 	}
 	make_parent(path);
-	mkdir(path, 0755);
+	system_mkdir(path, 0755);
 	*sep = '/';
 
 #if 0
@@ -488,7 +492,7 @@ handle_existing_file(char **path)
 			/* FALLTHROUGH */
 		case 'y':
 		case 'Y':
-			(void)unlink(*path);
+			system_unlink(*path);
 			return 1;
 		case 'N':
 			n_opt = 1;
@@ -678,20 +682,20 @@ recheck:
 #elif HAVE_STRUCT_STAT_ST_MTIME_N
 			    sb.st_mtime > mtime.tv_sec ||
 			    (sb.st_mtime == mtime.tv_sec &&
-			    sb.st_mtime_n => mtime.tv_nsec)
+			    sb.st_mtime_n >= mtime.tv_nsec)
 #elif HAVE_STRUCT_STAT_ST_MTIME_USEC
 			    sb.st_mtime > mtime.tv_sec ||
 			    (sb.st_mtime == mtime.tv_sec &&
-			    sb.st_mtime_usec => mtime.tv_nsec / 1000)
+			    sb.st_mtime_usec >= mtime.tv_nsec / 1000)
 #else
 			    sb.st_mtime > mtime.tv_sec
 #endif
 			    ))
 				return;
-			(void)unlink(*path);
+			system_unlink(*path);
 		} else if (o_opt) {
 			/* overwrite */
-			(void)unlink(*path);
+			system_unlink(*path);
 		} else if (n_opt) {
 			/* do not overwrite */
 			return;
@@ -727,7 +731,7 @@ recheck:
 			error("symlink('%s')", *path);
 		info(" extracting: %s -> %s\n", *path, linkname);
 #ifdef HAVE_LCHMOD
-		if (lchmod(*path, mode) != 0)
+		if (lchmod(*path, (mode_t)mode) != 0)
 			warning("Cannot set mode for '%s'", *path);
 #endif
 		/* set access and modification time */
@@ -742,7 +746,7 @@ recheck:
 		return;
 	}
 
-	if ((fd = open(*path, O_RDWR|O_CREAT|O_TRUNC, mode)) < 0)
+	if ((fd = open(*path, O_RDWR|O_CREAT|O_TRUNC|O_BINARY, mode)) < 0)
 		error("open('%s')", *path);
 
 	info(" extracting: %s", *path);
@@ -768,6 +772,17 @@ recheck:
 		error("close('%s')", *path);
 }
 
+static int
+pathname_is_insecure(const char* pathname)
+{
+	size_t len = strlen(pathname);
+	return (pathname[0] == '/' ||
+	    strcmp(pathname, "..") == 0 ||
+	    strncmp(pathname, "../", 3) == 0 ||
+	    strstr(pathname, "/../") != NULL ||
+	    (len >= 3 && strcmp(pathname + len - 3, "/..") == 0));
+}
+
 /*
  * Extract a zipfile entry: first perform some sanity checks to ensure
  * that it is either a directory or a regular file and that the path is
@@ -787,6 +802,7 @@ static void
 extract(struct archive *a, struct archive_entry *e)
 {
 	char *pathname, *realpathname;
+	const char *linktarget;
 	mode_t filetype;
 	char *p, *q;
 
@@ -798,10 +814,17 @@ extract(struct archive *a, struct archive_entry *e)
 	filetype = archive_entry_filetype(e);
 
 	/* sanity checks */
-	if (pathname[0] == '/' ||
-	    strncmp(pathname, "../", 3) == 0 ||
-	    strstr(pathname, "/../") != NULL) {
+	if (pathname_is_insecure(pathname)) {
 		warningx("skipping insecure entry '%s'", pathname);
+		ac(archive_read_data_skip(a));
+		free(pathname);
+		return;
+	}
+
+	if (S_ISLNK(filetype) &&
+	    ((linktarget = archive_entry_symlink(e)) != NULL) &&
+	    pathname_is_insecure(linktarget)) {
+		warningx("skipping insecure symlink '%s' to '%s'", pathname, linktarget);
 		ac(archive_read_data_skip(a));
 		free(pathname);
 		return;
@@ -903,30 +926,34 @@ list(struct archive *a, struct archive_entry *e)
 	char buf[20];
 	time_t mtime;
 	struct tm *tm;
+	const char *pathname;
 
 	mtime = archive_entry_mtime(e);
 	tm = localtime(&mtime);
 	if (*y_str)
-		strftime(buf, sizeof(buf), "%m-%d-%G %R", tm);
+		strftime(buf, sizeof(buf), "%m-%d-%Y %H:%M", tm);
 	else
-		strftime(buf, sizeof(buf), "%m-%d-%g %R", tm);
+		strftime(buf, sizeof(buf), "%m-%d-%y %H:%M", tm);
 
+	pathname = archive_entry_pathname(e);
+	if (!pathname)
+		pathname = "";
 	if (!zipinfo_mode) {
 		if (v_opt == 1) {
 			printf(" %8ju  %s   %s\n",
 			    (uintmax_t)archive_entry_size(e),
-			    buf, archive_entry_pathname(e));
+			    buf, pathname);
 		} else if (v_opt == 2) {
 			printf("%8ju  Stored  %7ju   0%%  %s  %08x  %s\n",
 			    (uintmax_t)archive_entry_size(e),
 			    (uintmax_t)archive_entry_size(e),
 			    buf,
 			    0U,
-			    archive_entry_pathname(e));
+			    pathname);
 		}
 	} else {
 		if (Z1_opt)
-			printf("%s\n",archive_entry_pathname(e));
+			printf("%s\n", pathname);
 	}
 	ac(archive_read_data_skip(a));
 }
@@ -999,7 +1026,8 @@ unzip(const char *fn)
 {
 	struct archive *a;
 	struct archive_entry *e;
-	int ret;
+	char *buf;
+	int fd, ret;
 	uintmax_t total_size, file_count, error_count;
 
 	if ((a = archive_read_new()) == NULL)
@@ -1016,7 +1044,29 @@ unzip(const char *fn)
 		archive_read_set_passphrase_callback(a, NULL,
 			&passphrase_callback);
 
-	ac(archive_read_open_filename(a, fn, 8192));
+	buf = NULL;
+	fd = open(fn, O_RDONLY | O_BINARY | O_CLOEXEC);
+	if (fd == -1) {
+		size_t s;
+
+		s = strlen(fn) + 5;
+		buf = malloc(s);
+		if (buf == NULL)
+			error("Failed to construct filename");
+		if (snprintf(buf, s, "%s.zip", fn) < 0)
+			errorx("Failed to construct filename");
+		fd = open(buf, O_RDONLY | O_BINARY | O_CLOEXEC);
+		if (fd == -1) {
+			if (snprintf(buf, s, "%s.ZIP", fn) < 0)
+				errorx("Failed to construct filename");
+			fd = open(buf, O_RDONLY | O_BINARY | O_CLOEXEC);
+		}
+		if (fd != -1)
+			fn = buf;
+	}
+	if (fd == -1)
+		errorx("Failed to open '%s'", fn);
+	ac(archive_read_open_fd(a, fd, 64 * 1024));
 
 	if (!zipinfo_mode) {
 		if (!p_opt && !q_opt)
@@ -1085,6 +1135,9 @@ unzip(const char *fn)
 			       fn);
 		}
 	}
+
+	close(fd);
+	free(buf);
 }
 
 static void
@@ -1186,7 +1239,8 @@ getopts(int argc, char *argv[])
 		case 'Z':
 			zipinfo_mode = 1;
 			if (bsdunzip->argument != NULL &&
-			    strcmp(bsdunzip->argument, "1") == 0) {
+			    (strcmp(bsdunzip->argument, "1") == 0 ||
+			    strcmp(bsdunzip->argument, "-1") == 0)) {
 				Z1_opt = 1;
 			}
 			break;
@@ -1209,6 +1263,16 @@ main(int argc, char *argv[])
 {
 	const char *zipfile;
 	int nopts;
+
+#if defined(HAVE_SIGACTION) && defined(SIGCHLD)
+	{ /* Do not ignore SIGCHLD. */
+		struct sigaction sa;
+		sa.sa_handler = SIG_DFL;
+		sigemptyset(&sa.sa_mask);
+		sa.sa_flags = 0;
+		sigaction(SIGCHLD, &sa, NULL);
+	}
+#endif
 
 	lafe_setprogname(*argv, "bsdunzip");
 
@@ -1282,6 +1346,13 @@ main(int argc, char *argv[])
 
 	if (n_opt + o_opt + u_opt > 1)
 		errorx("-n, -o and -u are contradictory");
+
+#if defined(_WIN32) && !defined(__CYGWIN__)
+	if (c_opt || p_opt) {
+		if (_setmode(STDOUT_FILENO, _O_BINARY) == -1)
+			errorx("unable to set binary output mode");
+	}
+#endif
 
 	unzip(zipfile);
 

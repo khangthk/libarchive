@@ -1,26 +1,8 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause
+ *
  * Copyright (c) 2003-2007 Tim Kientzle
  * All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- * 1. Redistributions of source code must retain the above copyright
- *    notice, this list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in the
- *    documentation and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE AUTHOR(S) ``AS IS'' AND ANY EXPRESS OR
- * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
- * OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
- * IN NO EVENT SHALL THE AUTHOR(S) BE LIABLE FOR ANY DIRECT, INDIRECT,
- * INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
- * NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
- * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
 #include "bsdtar_platform.h"
@@ -75,7 +57,8 @@
 #endif
 
 #include "bsdtar.h"
-#include "err.h"
+#include "lafe_err.h"
+#include "lafe_setmode.h"
 
 struct progress_data {
 	struct bsdtar *bsdtar;
@@ -139,16 +122,16 @@ progress_func(void *cookie)
 		else
 			compression = (int)((uncomp - comp) * 100 / uncomp);
 		fprintf(stderr,
-		    "In: %s bytes, compression %d%%;",
-		    tar_i64toa(comp), compression);
-		fprintf(stderr, "  Out: %d files, %s bytes\n",
-		    archive_file_count(a), tar_i64toa(uncomp));
+		    "In: %ju bytes, compression %d%%;",
+		    (uintmax_t)comp, compression);
+		fprintf(stderr, "  Out: %d files, %ju bytes\n",
+		    archive_file_count(a), (uintmax_t)uncomp);
 	}
 	if (entry != NULL) {
 		safe_fprintf(stderr, "Current: %s",
 		    archive_entry_pathname(entry));
-		fprintf(stderr, " (%s bytes)\n",
-		    tar_i64toa(archive_entry_size(entry)));
+		fprintf(stderr, " (%jd bytes)\n",
+		    (intmax_t)archive_entry_size(entry));
 	}
 }
 
@@ -252,9 +235,14 @@ read_archive(struct bsdtar *bsdtar, char mode, struct archive *writer)
 	for (;;) {
 		/* Support --fast-read option */
 		const char *p;
-		if ((bsdtar->flags & OPTFLAG_FAST_READ) &&
-		    archive_match_path_unmatched_inclusions(bsdtar->matching) == 0)
-			break;
+
+		if (bsdtar->flags & OPTFLAG_FAST_READ) {
+		    r = archive_match_path_unmatched_inclusions(bsdtar->matching);
+			if (r < 0)
+				lafe_errc(1, 0, "%s", archive_error_string(a));
+			if (!r)
+				break;
+		}
 
 		r = archive_read_next_header(a, &entry);
 		progress_data.entry = entry;
@@ -273,7 +261,7 @@ read_archive(struct bsdtar *bsdtar, char mode, struct archive *writer)
 			break;
 		p = archive_entry_pathname(entry);
 		if (p == NULL || p[0] == '\0') {
-			lafe_warnc(0, "Archive entry has empty or unreadable filename ... skipping.");
+			lafe_warnc(0, "Archive entry has empty or unreadable filename ... skipping");
 			bsdtar->return_value = 1;
 			continue;
 		}
@@ -291,6 +279,12 @@ read_archive(struct bsdtar *bsdtar, char mode, struct archive *writer)
 		if (bsdtar->gname)
 			archive_entry_set_gname(entry, bsdtar->gname);
 
+		if (bsdtar->file_mode) {
+			mode_t m = archive_entry_mode(entry);
+			m = lafe_getmode(bsdtar->file_mode, m);
+			archive_entry_set_mode(entry, m);
+		}
+
 		/*
 		 * Note that pattern exclusions are checked before
 		 * pathname rewrites are handled.  This gives more
@@ -300,7 +294,11 @@ read_archive(struct bsdtar *bsdtar, char mode, struct archive *writer)
 		 * rewrite, there would be no way to exclude foo1/bar
 		 * while allowing foo2/bar.)
 		 */
-		if (archive_match_excluded(bsdtar->matching, entry))
+		r = archive_match_excluded(bsdtar->matching, entry);
+		if (r == ARCHIVE_FATAL)
+			lafe_errc(1, 0, "%s",
+				    archive_error_string(bsdtar->matching));
+		if (r)
 			continue; /* Excluded by a pattern test. */
 
 		if (mode == 't') {
@@ -413,7 +411,7 @@ unmatched_inclusions_warn(struct archive *matching, const char *msg)
 	    matching, &p)) == ARCHIVE_OK)
 		lafe_warnc(0, "%s: %s", p, msg);
 	if (r == ARCHIVE_FATAL)
-		lafe_errc(1, errno, "Out of memory");
+		lafe_errc(1, 0, "%s", archive_error_string(matching));
 
 	return (archive_match_path_unmatched_inclusions(matching));
 }

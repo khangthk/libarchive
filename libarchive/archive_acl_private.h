@@ -27,7 +27,9 @@
 #define ARCHIVE_ACL_PRIVATE_H_INCLUDED
 
 #ifndef __LIBARCHIVE_BUILD
+#ifndef __LIBARCHIVE_TEST
 #error This header is only to be used internally to libarchive.
+#endif
 #endif
 
 #include "archive_string.h"
@@ -80,4 +82,4 @@ int archive_acl_from_text_l(struct archive_acl *, const char * /* text */,
 int archive_acl_from_text_nl(struct archive_acl *, const char * /* text */,
     size_t /* size of text */, int /* type */, struct archive_string_conv *);
 
-#endif /* ARCHIVE_ENTRY_PRIVATE_H_INCLUDED */
+#endif /* !ARCHIVE_ACL_PRIVATE_H_INCLUDED */

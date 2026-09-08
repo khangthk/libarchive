@@ -30,13 +30,13 @@ struct contents {
 	const char *d;
 };
 
-struct contents archive_contents_sparse[] = {
+static struct contents archive_contents_sparse[] = {
 	{ 1000000, 1, "a" },
 	{ 2000000, 1, "a" },
 	{ 3145728, 0, NULL }
 };
 
-struct contents archive_contents_sparse2[] = {
+static struct contents archive_contents_sparse2[] = {
 	{ 1000000, 1, "a" },
 	{ 2000000, 1, "a" },
 	{ 3000000, 1, "a" },
@@ -139,7 +139,7 @@ struct contents archive_contents_sparse2[] = {
 	{ 99000001, 0, NULL }
 };
 
-struct contents archive_contents_nonsparse[] = {
+static struct contents archive_contents_nonsparse[] = {
 	{ 0, 1, "a" },
 	{ 1, 0, NULL }
 };
@@ -159,7 +159,7 @@ struct contents archive_contents_nonsparse[] = {
  *   * contains a single byte 'a'
  */
 
-struct archive_contents {
+static struct archive_contents {
 	const char *filename;
 	struct contents *contents;
 } files[] = {
@@ -168,6 +168,58 @@ struct archive_contents {
 	{ "non-sparse", archive_contents_nonsparse },
 	{ NULL, NULL }
 };
+
+/* Reuse one callback buffer so the sparse extension overwrites the main header. */
+struct sparse_reuse_data {
+	FILE *file;
+	unsigned char block[512];
+};
+
+static la_ssize_t
+sparse_reuse_read(struct archive *a, void *client_data, const void **buffer)
+{
+	struct sparse_reuse_data *data = client_data;
+	size_t size;
+
+	(void)a;
+	size = fread(data->block, 1, sizeof(data->block), data->file);
+	if (size == 0 && ferror(data->file))
+		return (-1);
+	*buffer = data->block;
+	return ((la_ssize_t)size);
+}
+
+static void
+verify_sparse_header_reuse(void)
+{
+	const char *name = "test_read_format_gtar_sparse_reuse.tar";
+	struct sparse_reuse_data data;
+	struct archive_entry *ae;
+	struct archive *a;
+
+	extract_reference_file(name);
+	memset(&data, 0, sizeof(data));
+	data.file = fopen(name, "rb");
+	if (!assert(data.file != NULL))
+		return;
+
+	assert((a = archive_read_new()) != NULL);
+	assertEqualIntA(a, ARCHIVE_OK, archive_read_support_format_tar(a));
+	assertEqualIntA(a, ARCHIVE_OK,
+	    archive_read_open(a, &data, NULL, sparse_reuse_read, NULL));
+	assertEqualIntA(a, ARCHIVE_OK, archive_read_next_header(a, &ae));
+
+	assertEqualString("sparse", archive_entry_pathname(ae));
+	assertEqualInt(0644, archive_entry_perm(ae));
+	assertEqualInt(123, archive_entry_uid(ae));
+	assertEqualInt(456, archive_entry_gid(ae));
+	assertEqualInt(123456789, archive_entry_mtime(ae));
+
+	assertEqualIntA(a, ARCHIVE_EOF, archive_read_next_header(a, &ae));
+	assertEqualIntA(a, ARCHIVE_OK, archive_read_close(a));
+	assertEqualInt(ARCHIVE_OK, archive_read_free(a));
+	assertEqualInt(0, fclose(data.file));
+}
 
 static void
 verify_archive_file(const char *name, struct archive_contents *ac)
@@ -262,6 +314,8 @@ verify_archive_file(const char *name, struct archive_contents *ac)
 
 DEFINE_TEST(test_read_format_gtar_sparse)
 {
+	verify_sparse_header_reuse();
+
 	/* Two archives that use the "GNU tar sparse format". */
 	verify_archive_file("test_read_format_gtar_sparse_1_13.tar", files);
 	verify_archive_file("test_read_format_gtar_sparse_1_17.tar", files);

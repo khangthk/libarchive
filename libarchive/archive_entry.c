@@ -275,7 +275,7 @@ archive_entry_new2(struct archive *a)
  * Functions for reading fields from an archive_entry.
  */
 
-time_t
+__LA_TIME_T
 archive_entry_atime(struct archive_entry *entry)
 {
 	return (entry->ae_stat.aest_atime);
@@ -293,7 +293,7 @@ archive_entry_atime_is_set(struct archive_entry *entry)
 	return (entry->ae_set & AE_SET_ATIME);
 }
 
-time_t
+__LA_TIME_T
 archive_entry_birthtime(struct archive_entry *entry)
 {
 	return (entry->ae_stat.aest_birthtime);
@@ -311,7 +311,7 @@ archive_entry_birthtime_is_set(struct archive_entry *entry)
 	return (entry->ae_set & AE_SET_BIRTHTIME);
 }
 
-time_t
+__LA_TIME_T
 archive_entry_ctime(struct archive_entry *entry)
 {
 	return (entry->ae_stat.aest_ctime);
@@ -329,7 +329,7 @@ archive_entry_ctime_nsec(struct archive_entry *entry)
 	return (entry->ae_stat.aest_ctime_nsec);
 }
 
-dev_t
+__LA_DEV_T
 archive_entry_dev(struct archive_entry *entry)
 {
 	if (entry->ae_stat.aest_dev_is_broken_down)
@@ -345,7 +345,7 @@ archive_entry_dev_is_set(struct archive_entry *entry)
 	return (entry->ae_set & AE_SET_DEV);
 }
 
-dev_t
+__LA_DEV_T
 archive_entry_devmajor(struct archive_entry *entry)
 {
 	if (entry->ae_stat.aest_dev_is_broken_down)
@@ -354,7 +354,7 @@ archive_entry_devmajor(struct archive_entry *entry)
 		return major(entry->ae_stat.aest_dev);
 }
 
-dev_t
+__LA_DEV_T
 archive_entry_devminor(struct archive_entry *entry)
 {
 	if (entry->ae_stat.aest_dev_is_broken_down)
@@ -469,7 +469,7 @@ archive_entry_gname_w(struct archive_entry *entry)
 }
 
 int
-_archive_entry_gname_l(struct archive_entry *entry,
+archive_entry_gname_l(struct archive_entry *entry,
     const char **p, size_t *len, struct archive_string_conv *sc)
 {
 	return (archive_mstring_get_mbs_l(entry->archive, &entry->ae_gname, p, len, sc));
@@ -533,7 +533,7 @@ archive_entry_hardlink_is_set(struct archive_entry *entry)
 }
 
 int
-_archive_entry_hardlink_l(struct archive_entry *entry,
+archive_entry_hardlink_l(struct archive_entry *entry,
     const char **p, size_t *len, struct archive_string_conv *sc)
 {
 	if ((entry->ae_set & AE_SET_HARDLINK) == 0) {
@@ -568,7 +568,7 @@ archive_entry_mode(struct archive_entry *entry)
 	return (entry->acl.mode);
 }
 
-time_t
+__LA_TIME_T
 archive_entry_mtime(struct archive_entry *entry)
 {
 	return (entry->ae_stat.aest_mtime);
@@ -643,7 +643,7 @@ archive_entry_pathname_w(struct archive_entry *entry)
 }
 
 int
-_archive_entry_pathname_l(struct archive_entry *entry,
+archive_entry_pathname_l(struct archive_entry *entry,
     const char **p, size_t *len, struct archive_string_conv *sc)
 {
 	return (archive_mstring_get_mbs_l(entry->archive, &entry->ae_pathname, p, len, sc));
@@ -667,7 +667,7 @@ archive_entry_rdev_is_set(struct archive_entry *entry)
 	return (entry->ae_set & AE_SET_RDEV);
 }
 
-dev_t
+__LA_DEV_T
 archive_entry_rdev(struct archive_entry *entry)
 {
 	if (archive_entry_rdev_is_set(entry)) {
@@ -681,7 +681,7 @@ archive_entry_rdev(struct archive_entry *entry)
 	}
 }
 
-dev_t
+__LA_DEV_T
 archive_entry_rdevmajor(struct archive_entry *entry)
 {
 	if (archive_entry_rdev_is_set(entry)) {
@@ -694,7 +694,7 @@ archive_entry_rdevmajor(struct archive_entry *entry)
 	}
 }
 
-dev_t
+__LA_DEV_T
 archive_entry_rdevminor(struct archive_entry *entry)
 {
 	if (archive_entry_rdev_is_set(entry)) {
@@ -799,7 +799,7 @@ archive_entry_symlink_w(struct archive_entry *entry)
 }
 
 int
-_archive_entry_symlink_l(struct archive_entry *entry,
+archive_entry_symlink_l(struct archive_entry *entry,
     const char **p, size_t *len, struct archive_string_conv *sc)
 {
 	if ((entry->ae_set & AE_SET_SYMLINK) == 0) {
@@ -856,7 +856,7 @@ archive_entry_uname_w(struct archive_entry *entry)
 }
 
 int
-_archive_entry_uname_l(struct archive_entry *entry,
+archive_entry_uname_l(struct archive_entry *entry,
     const char **p, size_t *len, struct archive_string_conv *sc)
 {
 	return (archive_mstring_get_mbs_l(entry->archive, &entry->ae_uname, p, len, sc));
@@ -974,7 +974,7 @@ archive_entry_update_gname_utf8(struct archive_entry *entry, const char *name)
 }
 
 int
-_archive_entry_copy_gname_l(struct archive_entry *entry,
+archive_entry_copy_gname_l(struct archive_entry *entry,
     const char *name, size_t len, struct archive_string_conv *sc)
 {
 	return (archive_mstring_copy_mbs_len_l(&entry->ae_gname, name, len, sc));
@@ -984,7 +984,9 @@ void
 archive_entry_set_ino(struct archive_entry *entry, la_int64_t ino)
 {
 	if (ino < 0) {
-		ino = 0;
+		entry->stat_valid = 0;
+		entry->ae_set &= ~AE_SET_INO;
+		return;
 	}
 	entry->stat_valid = 0;
 	entry->ae_set |= AE_SET_INO;
@@ -995,7 +997,9 @@ void
 archive_entry_set_ino64(struct archive_entry *entry, la_int64_t ino)
 {
 	if (ino < 0) {
-		ino = 0;
+		entry->stat_valid = 0;
+		entry->ae_set &= ~AE_SET_INO;
+		return;
 	}
 	entry->stat_valid = 0;
 	entry->ae_set |= AE_SET_INO;
@@ -1071,7 +1075,7 @@ archive_entry_update_hardlink_utf8(struct archive_entry *entry, const char *targ
 }
 
 int
-_archive_entry_copy_hardlink_l(struct archive_entry *entry,
+archive_entry_copy_hardlink_l(struct archive_entry *entry,
     const char *target, size_t len, struct archive_string_conv *sc)
 {
 	int r;
@@ -1088,7 +1092,7 @@ _archive_entry_copy_hardlink_l(struct archive_entry *entry,
 }
 
 void
-archive_entry_set_atime(struct archive_entry *entry, time_t t, long ns)
+archive_entry_set_atime(struct archive_entry *entry, __LA_TIME_T t, long ns)
 {
 	FIX_NS(t, ns);
 	entry->stat_valid = 0;
@@ -1105,7 +1109,7 @@ archive_entry_unset_atime(struct archive_entry *entry)
 }
 
 void
-archive_entry_set_birthtime(struct archive_entry *entry, time_t t, long ns)
+archive_entry_set_birthtime(struct archive_entry *entry, __LA_TIME_T t, long ns)
 {
 	FIX_NS(t, ns);
 	entry->stat_valid = 0;
@@ -1122,7 +1126,7 @@ archive_entry_unset_birthtime(struct archive_entry *entry)
 }
 
 void
-archive_entry_set_ctime(struct archive_entry *entry, time_t t, long ns)
+archive_entry_set_ctime(struct archive_entry *entry, __LA_TIME_T t, long ns)
 {
 	FIX_NS(t, ns);
 	entry->stat_valid = 0;
@@ -1139,7 +1143,7 @@ archive_entry_unset_ctime(struct archive_entry *entry)
 }
 
 void
-archive_entry_set_dev(struct archive_entry *entry, dev_t d)
+archive_entry_set_dev(struct archive_entry *entry, __LA_DEV_T d)
 {
 	entry->stat_valid = 0;
 	entry->ae_set |= AE_SET_DEV;
@@ -1148,7 +1152,7 @@ archive_entry_set_dev(struct archive_entry *entry, dev_t d)
 }
 
 void
-archive_entry_set_devmajor(struct archive_entry *entry, dev_t m)
+archive_entry_set_devmajor(struct archive_entry *entry, __LA_DEV_T m)
 {
 	entry->stat_valid = 0;
 	entry->ae_set |= AE_SET_DEV;
@@ -1157,7 +1161,7 @@ archive_entry_set_devmajor(struct archive_entry *entry, dev_t m)
 }
 
 void
-archive_entry_set_devminor(struct archive_entry *entry, dev_t m)
+archive_entry_set_devminor(struct archive_entry *entry, __LA_DEV_T m)
 {
 	entry->stat_valid = 0;
 	entry->ae_set |= AE_SET_DEV;
@@ -1221,7 +1225,7 @@ archive_entry_update_link_utf8(struct archive_entry *entry, const char *target)
 }
 
 int
-_archive_entry_copy_link_l(struct archive_entry *entry,
+archive_entry_copy_link_l(struct archive_entry *entry,
     const char *target, size_t len, struct archive_string_conv *sc)
 {
 	int r;
@@ -1235,7 +1239,7 @@ _archive_entry_copy_link_l(struct archive_entry *entry,
 }
 
 void
-archive_entry_set_mode(struct archive_entry *entry, mode_t m)
+archive_entry_set_mode(struct archive_entry *entry, __LA_MODE_T m)
 {
 	entry->stat_valid = 0;
 	entry->acl.mode = m;
@@ -1243,7 +1247,7 @@ archive_entry_set_mode(struct archive_entry *entry, mode_t m)
 }
 
 void
-archive_entry_set_mtime(struct archive_entry *entry, time_t t, long ns)
+archive_entry_set_mtime(struct archive_entry *entry, __LA_TIME_T t, long ns)
 {
 	FIX_NS(t, ns);
 	entry->stat_valid = 0;
@@ -1302,7 +1306,7 @@ archive_entry_update_pathname_utf8(struct archive_entry *entry, const char *name
 }
 
 int
-_archive_entry_copy_pathname_l(struct archive_entry *entry,
+archive_entry_copy_pathname_l(struct archive_entry *entry,
     const char *name, size_t len, struct archive_string_conv *sc)
 {
 	return (archive_mstring_copy_mbs_len_l(&entry->ae_pathname,
@@ -1310,7 +1314,7 @@ _archive_entry_copy_pathname_l(struct archive_entry *entry,
 }
 
 void
-archive_entry_set_perm(struct archive_entry *entry, mode_t p)
+archive_entry_set_perm(struct archive_entry *entry, __LA_MODE_T p)
 {
 	entry->stat_valid = 0;
 	entry->acl.mode &= AE_IFMT;
@@ -1319,7 +1323,7 @@ archive_entry_set_perm(struct archive_entry *entry, mode_t p)
 }
 
 void
-archive_entry_set_rdev(struct archive_entry *entry, dev_t m)
+archive_entry_set_rdev(struct archive_entry *entry, __LA_DEV_T m)
 {
 	entry->stat_valid = 0;
 	entry->ae_stat.aest_rdev = m;
@@ -1330,7 +1334,7 @@ archive_entry_set_rdev(struct archive_entry *entry, dev_t m)
 }
 
 void
-archive_entry_set_rdevmajor(struct archive_entry *entry, dev_t m)
+archive_entry_set_rdevmajor(struct archive_entry *entry, __LA_DEV_T m)
 {
 	entry->stat_valid = 0;
 	entry->ae_stat.aest_rdev_is_broken_down = 1;
@@ -1340,7 +1344,7 @@ archive_entry_set_rdevmajor(struct archive_entry *entry, dev_t m)
 }
 
 void
-archive_entry_set_rdevminor(struct archive_entry *entry, dev_t m)
+archive_entry_set_rdevminor(struct archive_entry *entry, __LA_DEV_T m)
 {
 	entry->stat_valid = 0;
 	entry->ae_stat.aest_rdev_is_broken_down = 1;
@@ -1456,7 +1460,7 @@ archive_entry_update_symlink_utf8(struct archive_entry *entry, const char *linkn
 }
 
 int
-_archive_entry_copy_symlink_l(struct archive_entry *entry,
+archive_entry_copy_symlink_l(struct archive_entry *entry,
     const char *linkname, size_t len, struct archive_string_conv *sc)
 {
 	int r;
@@ -1540,7 +1544,7 @@ archive_entry_set_is_metadata_encrypted(struct archive_entry *entry, char is_enc
 }
 
 int
-_archive_entry_copy_uname_l(struct archive_entry *entry,
+archive_entry_copy_uname_l(struct archive_entry *entry,
     const char *name, size_t len, struct archive_string_conv *sc)
 {
 	return (archive_mstring_copy_mbs_len_l(&entry->ae_uname,
@@ -1558,17 +1562,21 @@ void
 archive_entry_copy_mac_metadata(struct archive_entry *entry,
     const void *p, size_t s)
 {
-  free(entry->mac_metadata);
-  if (p == NULL || s == 0) {
-    entry->mac_metadata = NULL;
-    entry->mac_metadata_size = 0;
-  } else {
-    entry->mac_metadata_size = s;
-    entry->mac_metadata = malloc(s);
-    if (entry->mac_metadata == NULL)
-      abort();
-    memcpy(entry->mac_metadata, p, s);
-  }
+	void *metadata;
+
+	if (p == NULL || s == 0) {
+		free(entry->mac_metadata);
+		entry->mac_metadata = NULL;
+		entry->mac_metadata_size = 0;
+	} else {
+		metadata = malloc(s);
+		if (metadata == NULL)
+			abort();
+		memcpy(metadata, p, s);
+		free(entry->mac_metadata);
+		entry->mac_metadata = metadata;
+		entry->mac_metadata_size = s;
+	}
 }
 
 /* Digest handling */
@@ -1603,21 +1611,27 @@ archive_entry_set_digest(struct archive_entry *entry, int type,
 	switch (type) {
 	case ARCHIVE_ENTRY_DIGEST_MD5:
 		copy_digest(entry, md5, digest);
+		entry->mset_digest |= AE_MSET_DIGEST_MD5;
 		break;
 	case ARCHIVE_ENTRY_DIGEST_RMD160:
 		copy_digest(entry, rmd160, digest);
+		entry->mset_digest |= AE_MSET_DIGEST_RMD160;
 		break;
 	case ARCHIVE_ENTRY_DIGEST_SHA1:
 		copy_digest(entry, sha1, digest);
+		entry->mset_digest |= AE_MSET_DIGEST_SHA1;
 		break;
 	case ARCHIVE_ENTRY_DIGEST_SHA256:
 		copy_digest(entry, sha256, digest);
+		entry->mset_digest |= AE_MSET_DIGEST_SHA256;
 		break;
 	case ARCHIVE_ENTRY_DIGEST_SHA384:
 		copy_digest(entry, sha384, digest);
+		entry->mset_digest |= AE_MSET_DIGEST_SHA384;
 		break;
 	case ARCHIVE_ENTRY_DIGEST_SHA512:
 		copy_digest(entry, sha512, digest);
+		entry->mset_digest |= AE_MSET_DIGEST_SHA512;
 		break;
 	default:
 		return ARCHIVE_WARN;
@@ -1734,7 +1748,7 @@ archive_entry_acl_to_text(struct archive_entry *entry, la_ssize_t *len,
 }
 
 char *
-_archive_entry_acl_to_text_l(struct archive_entry *entry, ssize_t *len,
+archive_entry_acl_to_text_l(struct archive_entry *entry, ssize_t *len,
    int flags, struct archive_string_conv *sc)
 {
 	return (archive_acl_to_text_l(&entry->acl, len, flags, sc));
@@ -1758,7 +1772,7 @@ archive_entry_acl_from_text(struct archive_entry *entry,
 }
 
 int
-_archive_entry_acl_from_text_l(struct archive_entry *entry, const char *text,
+archive_entry_acl_from_text_l(struct archive_entry *entry, const char *text,
     int type, struct archive_string_conv *sc)
 {
 	return (archive_acl_from_text_l(&entry->acl, text, type, sc));
@@ -1811,7 +1825,7 @@ archive_entry_acl_text(struct archive_entry *entry, int flags)
 
 /* Deprecated */
 int
-_archive_entry_acl_text_l(struct archive_entry *entry, int flags,
+archive_entry_acl_text_l(struct archive_entry *entry, int flags,
     const char **acl_text, size_t *len, struct archive_string_conv *sc)
 {
 	free(entry->acl.acl_text);

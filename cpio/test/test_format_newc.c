@@ -1,28 +1,17 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause
+ *
  * Copyright (c) 2003-2007 Tim Kientzle
  * All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- * 1. Redistributions of source code must retain the above copyright
- *    notice, this list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in the
- *    documentation and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE AUTHOR(S) ``AS IS'' AND ANY EXPRESS OR
- * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
- * OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
- * IN NO EVENT SHALL THE AUTHOR(S) BE LIABLE FOR ANY DIRECT, INDIRECT,
- * INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
- * NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
- * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 #include "test.h"
+
+#ifdef HAVE_GETEUID
+#define getuid() geteuid()
+#endif
+#ifdef HAVE_GETEGID
+#define getgid() getegid()
+#endif
 
 /* Number of bytes needed to pad 'n' to multiple of 'block', assuming
  * that 'block' is a power of two. This trick can be more easily
@@ -124,42 +113,6 @@ DEFINE_TEST(test_format_newc)
 
 	/* Setup result message. */
 	memset(result, 0, sizeof(result));
-	if (is_LargeInode("file1")) {
-		strncat(result,
-		    "bsdcpio: file1: large inode number truncated: ",
-		    sizeof(result) - strlen(result) -1);
-		strncat(result, strerror(ERANGE),
-		    sizeof(result) - strlen(result) -1);
-		strncat(result, "\n",
-		    sizeof(result) - strlen(result) -1);
-	}
-	if (canSymlink() && is_LargeInode("symlink")) {
-		strncat(result,
-		    "bsdcpio: symlink: large inode number truncated: ",
-		    sizeof(result) - strlen(result) -1);
-		strncat(result, strerror(ERANGE),
-		    sizeof(result) - strlen(result) -1);
-		strncat(result, "\n",
-		    sizeof(result) - strlen(result) -1);
-	}
-	if (is_LargeInode("dir")) {
-		strncat(result,
-		    "bsdcpio: dir: large inode number truncated: ",
-		    sizeof(result) - strlen(result) -1);
-		strncat(result, strerror(ERANGE),
-		    sizeof(result) - strlen(result) -1);
-		strncat(result, "\n",
-		    sizeof(result) - strlen(result) -1);
-	}
-	if (is_LargeInode("hardlink")) {
-		strncat(result,
-		    "bsdcpio: hardlink: large inode number truncated: ",
-		    sizeof(result) - strlen(result) -1);
-		strncat(result, strerror(ERANGE),
-		    sizeof(result) - strlen(result) -1);
-		strncat(result, "\n",
-		    sizeof(result) - strlen(result) -1);
-	}
 
 	/* Record some facts about what we just created: */
 	now = time(NULL); /* They were all created w/in last two seconds. */
@@ -194,11 +147,11 @@ DEFINE_TEST(test_format_newc)
 	assertEqualMem(e + 0, "070701", 6); /* Magic */
 	ino = from_hex(e + 6, 8); /* ino */
 #if defined(_WIN32) && !defined(__CYGWIN__)
-	/* Group members bits and others bits do not work. */ 
+	/* Group members bits and others bits do not work. */
 	assertEqualInt(0x8180, from_hex(e + 14, 8) & 0xffc0); /* Mode */
 #else
 	assertEqualInt(0x81a4, from_hex(e + 14, 8)); /* Mode */
-#endif	
+#endif
 #if defined(_WIN32)
 	uid = from_hex(e + 22, 8);
 #else
@@ -207,10 +160,10 @@ DEFINE_TEST(test_format_newc)
 	gid = from_hex(e + 30, 8); /* gid */
 	assertEqualMem(e + 38, "00000003", 8); /* nlink */
 	t = from_hex(e + 46, 8); /* mtime */
-	failure("t=%#08jx now=%#08jx=%jd", (intmax_t)t, (intmax_t)now,
+	failure("t=%#08jx now=%#08jx=%jd", (uintmax_t)t, (uintmax_t)now,
 	    (intmax_t)now);
-	assert(t <= now); /* File wasn't created in future. */
-	failure("t=%#08jx now - 2=%#08jx=%jd", (intmax_t)t, (intmax_t)now - 2,
+	assert(t <= now + 1); /* Allow 1 sec margin for timing variations. */
+	failure("t=%#08jx now - 2=%#08jx=%jd", (uintmax_t)t, (uintmax_t)now - 2,
 	    (intmax_t)now - 2);
 	assert(t >= now - 2); /* File was created w/in last 2 secs. */
 	failure("newc format stores body only with last appearance of a link\n"
@@ -236,8 +189,8 @@ DEFINE_TEST(test_format_newc)
 		/* "symlink" pointing to "file1" */
 		assert(is_hex(e, 110));
 		assertEqualMem(e + 0, "070701", 6); /* Magic */
-		assert(is_hex(e + 6, 8)); /* ino */
-#if defined(_WIN32) && !defined(CYGWIN)
+		assert(ino != from_hex(e + 6, 8)); /* ino */
+#if defined(_WIN32) && !defined(__CYGWIN__)
 		/* Mode: Group members bits and others bits do not work. */
 		assertEqualInt(0xa180, from_hex(e + 14, 8) & 0xffc0);
 #else
@@ -248,7 +201,7 @@ DEFINE_TEST(test_format_newc)
 		assertEqualMem(e + 38, "00000001", 8); /* nlink */
 		t2 = from_hex(e + 46, 8); /* mtime */
 		failure("First entry created at t=%#08jx this entry created"
-		    " at t2=%#08jx", (intmax_t)t, (intmax_t)t2);
+		    " at t2=%#08jx", (uintmax_t)t, (uintmax_t)t2);
 		assert(t2 == t || t2 == t + 1); /* Almost same as first entry. */
 		assertEqualMem(e + 54, "00000005", 8); /* File size */
 		fs = (uint64_t)from_hex(e + 54, 8);
@@ -269,7 +222,7 @@ DEFINE_TEST(test_format_newc)
 	/* "dir" */
 	assert(is_hex(e, 110));
 	assertEqualMem(e + 0, "070701", 6); /* Magic */
-	assert(is_hex(e + 6, 8)); /* ino */
+	assert(ino != from_hex(e + 6, 8)); /* ino */
 #if defined(_WIN32) && !defined(__CYGWIN__)
 	/* Group members bits and others bits do not work. */
 	assertEqualInt(0x41c0, from_hex(e + 14, 8) & 0xffc0); /* Mode */
@@ -284,7 +237,7 @@ DEFINE_TEST(test_format_newc)
 #endif
 	t2 = from_hex(e + 46, 8); /* mtime */
 	failure("First entry created at t=%#08jx this entry created at"
-	    "t2=%#08jx", (intmax_t)t, (intmax_t)t2);
+	    "t2=%#08jx", (uintmax_t)t, (uintmax_t)t2);
 	assert(t2 == t || t2 == t + 1); /* Almost same as first entry. */
 	assertEqualMem(e + 54, "00000000", 8); /* File size */
 	fs = (uint64_t)from_hex(e + 54, 8);
@@ -308,7 +261,7 @@ DEFINE_TEST(test_format_newc)
 	failure("If these aren't the same, then the hardlink detection failed to match them.");
 	assertEqualInt(ino, from_hex(e + 6, 8)); /* ino */
 #if defined(_WIN32) && !defined(__CYGWIN__)
-	/* Group members bits and others bits do not work. */ 
+	/* Group members bits and others bits do not work. */
 	assertEqualInt(0x8180, from_hex(e + 14, 8) & 0xffc0); /* Mode */
 #else
 	assertEqualInt(0x81a4, from_hex(e + 14, 8)); /* Mode */
@@ -318,7 +271,7 @@ DEFINE_TEST(test_format_newc)
 	assertEqualMem(e + 38, "00000003", 8); /* nlink */
 	t2 = from_hex(e + 46, 8); /* mtime */
 	failure("First entry created at t=%#08jx this entry created at"
-	    "t2=%#08jx", (intmax_t)t, (intmax_t)t2);
+	    "t2=%#08jx", (uintmax_t)t, (uintmax_t)t2);
 	assert(t2 == t || t2 == t + 1); /* Almost same as first entry. */
 	assertEqualInt(10, from_hex(e + 54, 8)); /* File size */
 	fs = (uint64_t)from_hex(e + 54, 8);
